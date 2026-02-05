@@ -2,23 +2,24 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots # Yeni eklendi (Alt alta grafik için)
 from prophet import Prophet
 from datetime import datetime, timedelta
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Finans Asistanı Pro", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Finans Pro v3.0", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS (Görsel İyileştirme) ---
+# --- CSS ---
 st.markdown("""
 <style>
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #0e1117; border-radius: 5px; color: white; }
+    .stTabs [data-baseweb="tab"] { height: 50px; background-color: #0e1117; border-radius: 5px; color: white; }
     .stTabs [data-baseweb="tab"]:hover { background-color: #262730; color: #FFA500; }
-    .stMetric { background-color: #0e1117; border: 1px solid #333; padding: 10px; border-radius: 5px; }
+    .stMetric { background-color: #1f2937; border: 1px solid #374151; padding: 15px; border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- VARLIK LİSTESİ (Çapraz Kur Destekli) ---
+# --- VARLIK LİSTESİ ---
 varliklar = {
     'USD - Amerikan Doları': {'ticker': 'USDTRY=X', 'source': 'direct'},
     'EUR - Avrupa Para Birimi': {'ticker': 'EURTRY=X', 'source': 'direct'},
@@ -39,7 +40,15 @@ varliklar = {
     'RON - Rumen Leyi': {'ticker': 'USDRON=X', 'source': 'calc'}
 }
 
-# --- MERKEZİ VERİ FONKSİYONU ---
+# --- YARDIMCI FONKSİYONLAR ---
+# RSI Hesaplama Fonksiyonu (Teknik Analiz)
+def rsi_hesapla(series, period=14):
+    delta = series.diff(1)
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
 @st.cache_data(ttl=300)
 def veri_getir(info):
     try:
@@ -81,33 +90,51 @@ def veri_getir(info):
         return pd.DataFrame()
 
 # --- YAN MENÜ ---
-st.sidebar.title("Finans Asistanı 🚀")
-st.sidebar.markdown("---")
-secilen_isim = st.sidebar.selectbox("Ana Para Birimi", list(varliklar.keys()))
-st.sidebar.info("Uygulama üstündeki sekmelerden (Tab) mod değiştirebilirsiniz.")
+st.sidebar.title("Finans Pro 🚀")
+secilen_isim = st.sidebar.selectbox("Varlık Seçimi", list(varliklar.keys()))
 
-# --- ANA VERİYİ ÇEK ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("📊 Grafik Ayarları")
+# Kullanıcı bu kutucukları işaretlerse grafik değişecek
+goster_sma50 = st.sidebar.checkbox("50 Günlük Ortalama (Trend)", value=False)
+goster_sma200 = st.sidebar.checkbox("200 Günlük Ortalama (Uzun Vade)", value=False)
+goster_rsi = st.sidebar.checkbox("RSI Göstergesi (Ucuz/Pahalı)", value=True)
+
+# --- VERİ ÇEKME ---
 ana_df = veri_getir(varliklar[secilen_isim])
 
-# --- SEKMELER ---
-tab1, tab2, tab3 = st.tabs(["🔮 Analiz & Tahmin", "🏎️ Karşılaştırma", "⏳ Zaman Makinesi"])
+# --- SAYFA YAPISI ---
+tab1, tab2, tab3 = st.tabs(["🔮 Analiz Merkezi", "🏎️ Yarış Pisti", "⏳ Zaman Makinesi"])
 
 # ---------------------------------------------------------
-# TAB 1: MEVCUT SİSTEM (ANALİZ & TAHMİN)
+# TAB 1: PROFESYONEL ANALİZ
 # ---------------------------------------------------------
 with tab1:
-    st.header(f"📈 {secilen_isim} Analizi")
+    st.header(f"📈 {secilen_isim} Teknik Analizi")
     
     if not ana_df.empty and len(ana_df) > 1:
         son_fiyat = float(ana_df['Close'].iloc[-1])
         onceki_fiyat = float(ana_df['Close'].iloc[-2])
         degisim = ((son_fiyat - onceki_fiyat) / onceki_fiyat) * 100
         
-        c1, c2 = st.columns([1, 4])
-        with c1:
-            st.metric("Anlık Değer", f"{son_fiyat:.2f} ₺", f"%{degisim:.2f}")
+        # Metrikler
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Anlık Fiyat", f"{son_fiyat:.2f} ₺", f"%{degisim:.2f}")
         
-        # Prophet
+        # RSI Hesapla ve Yorumla
+        rsi_deger = rsi_hesapla(ana_df['Close']).iloc[-1]
+        rsi_durum = "Nötr"
+        rsi_renk = "off"
+        if rsi_deger > 70: 
+            rsi_durum = "⚠️ Aşırı Alım (Pahalı)" 
+            rsi_renk = "normal"
+        elif rsi_deger < 30: 
+            rsi_durum = "✅ Aşırı Satım (Ucuz)"
+            rsi_renk = "inverse"
+        
+        c2.metric("RSI İndikatörü", f"{rsi_deger:.1f}", rsi_durum, delta_color=rsi_renk)
+        
+        # Prophet Tahmini
         try:
             df_prophet = ana_df.reset_index()[['Date', 'Close']]
             df_prophet.columns = ['ds', 'y']
@@ -116,107 +143,101 @@ with tab1:
             future = model.make_future_dataframe(periods=14)
             forecast = model.predict(future)
             
-            fig = go.Figure()
-            gosterim_df = ana_df.tail(180)
+            # --- GRAFİK OLUŞTURMA (SUBPLOTS) ---
+            # Eğer RSI seçiliyse alt alta 2 grafik, değilse tek grafik
+            rows = 2 if goster_rsi else 1
+            row_heights = [0.7, 0.3] if goster_rsi else [1.0]
+            vertical_gap = 0.1 if goster_rsi else 0
             
-            fig.add_trace(go.Scatter(x=gosterim_df.index, y=gosterim_df['Close'], mode='lines', name='Gerçekleşen', line=dict(color='#00BFFF', width=3), hovertemplate='%{y:.2f} TL'))
+            fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, 
+                                vertical_spacing=vertical_gap, row_heights=row_heights,
+                                subplot_titles=(f"{secilen_isim} Fiyat Grafiği", "RSI Güç Endeksi") if goster_rsi else (f"{secilen_isim} Fiyat Grafiği",))
+
+            # 1. Ana Fiyat Çizgisi
+            gosterim_df = ana_df.tail(250) # Son 1 iş yılı
+            fig.add_trace(go.Scatter(x=gosterim_df.index, y=gosterim_df['Close'], mode='lines', name='Fiyat', line=dict(color='#00BFFF', width=2)), row=1, col=1)
+
+            # 2. Hareketli Ortalamalar (İsteğe Bağlı)
+            if goster_sma50:
+                sma50 = gosterim_df['Close'].rolling(window=50).mean()
+                fig.add_trace(go.Scatter(x=gosterim_df.index, y=sma50, mode='lines', name='50 Günlük Ort.', line=dict(color='#ffff00', width=1)), row=1, col=1)
             
+            if goster_sma200:
+                sma200 = gosterim_df['Close'].rolling(window=200).mean()
+                fig.add_trace(go.Scatter(x=gosterim_df.index, y=sma200, mode='lines', name='200 Günlük Ort.', line=dict(color='#ff00ff', width=1)), row=1, col=1)
+
+            # 3. Tahmin Çizgisi
             future_forecast = forecast.tail(14)
-            fig.add_trace(go.Scatter(x=future_forecast['ds'], y=future_forecast['yhat'], mode='lines', name='YZ Tahmini', line=dict(color='#FFA500', width=3, dash='dot'), hovertemplate='%{y:.2f} TL'))
-            
-            fig.update_layout(template="plotly_dark", height=500, hovermode="x unified", legend=dict(orientation="h", y=1.1))
+            fig.add_trace(go.Scatter(x=future_forecast['ds'], y=future_forecast['yhat'], mode='lines', name='YZ Tahmini', line=dict(color='#FFA500', width=2, dash='dot')), row=1, col=1)
+
+            # 4. RSI Grafiği (Alt Kısım)
+            if goster_rsi:
+                rsi_series = rsi_hesapla(gosterim_df['Close'])
+                fig.add_trace(go.Scatter(x=gosterim_df.index, y=rsi_series, mode='lines', name='RSI', line=dict(color='#9370DB')), row=2, col=1)
+                # Sınır çizgileri (30 ve 70)
+                fig.add_hrect(y0=70, y1=100, row=2, col=1, fillcolor="red", opacity=0.1, line_width=0)
+                fig.add_hrect(y0=0, y1=30, row=2, col=1, fillcolor="green", opacity=0.1, line_width=0)
+                fig.add_hline(y=70, line_dash="dot", row=2, col=1, line_color="red", line_width=1)
+                fig.add_hline(y=30, line_dash="dot", row=2, col=1, line_color="green", line_width=1)
+
+            fig.update_layout(template="plotly_dark", height=600, hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0))
             st.plotly_chart(fig, use_container_width=True)
             
-            # Excel İndirme
-            csv = ana_df.to_csv().encode('utf-8')
-            st.download_button("📥 Verileri Excel Olarak İndir", csv, f"{secilen_isim}_veri.csv", "text/csv")
+            # Yorum
+            c3.info(f"Yapay Zeka Hedefi (14 Gün): {future_forecast['yhat'].iloc[-1]:.2f} TL")
             
-        except Exception:
+        except Exception as e:
+            st.warning("Teknik analiz grafiği oluşturulurken veri yetersiz kaldı.")
             st.line_chart(ana_df['Close'])
     else:
         st.error("Veri alınamadı.")
 
 # ---------------------------------------------------------
-# TAB 2: KARŞILAŞTIRMA MODU
+# TAB 2: KARŞILAŞTIRMA MODU (Öncekiyle aynı)
 # ---------------------------------------------------------
 with tab2:
     st.header("🆚 Varlık Yarışı")
-    st.write("Seçtiğin para birimlerinin son 1 yıldaki performansını karşılaştır.")
-    
     karsilastirma_listesi = st.multiselect("Karşılaştırılacakları Seçin:", list(varliklar.keys()), default=['USD - Amerikan Doları', 'EUR - Avrupa Para Birimi', 'XAU - Altın (Gram)'])
     
     if karsilastirma_listesi:
         fig_comp = go.Figure()
-        
-        with st.spinner('Veriler karşılaştırılıyor...'):
+        with st.spinner('Hesaplanıyor...'):
             for varlik in karsilastirma_listesi:
                 df_temp = veri_getir(varliklar[varlik])
                 if not df_temp.empty:
-                    # Son 1 yılı al
                     df_temp = df_temp.tail(365)
-                    # Normalize et (Yüzdesel değişim için: İlk gün 100 kabul edilir)
                     ilk_fiyat = float(df_temp['Close'].iloc[0])
                     df_temp['Normalize'] = (df_temp['Close'] / ilk_fiyat) * 100
-                    
-                    fig_comp.add_trace(go.Scatter(
-                        x=df_temp.index, 
-                        y=df_temp['Normalize'], 
-                        mode='lines', 
-                        name=varlik.split(' - ')[0], # Sadece kısa kodu göster
-                        hovertemplate='%{y:.1f} Puan'
-                    ))
+                    fig_comp.add_trace(go.Scatter(x=df_temp.index, y=df_temp['Normalize'], mode='lines', name=varlik.split(' - ')[0]))
         
-        fig_comp.update_layout(
-            title="Son 1 Yıl Performans Karşılaştırması (Başlangıç=100)",
-            yaxis_title="Büyüme Endeksi",
-            template="plotly_dark",
-            height=600,
-            hovermode="x unified"
-        )
+        fig_comp.update_layout(title="Son 1 Yıl Performansı (Başlangıç=100)", template="plotly_dark", height=500)
         st.plotly_chart(fig_comp, use_container_width=True)
-        st.caption("Not: Grafikteki çizgiler 'fiyatı' değil 'kazandırma oranını' gösterir. Çizgisi en üstte olan en çok kazandırandır.")
 
 # ---------------------------------------------------------
-# TAB 3: ZAMAN MAKİNESİ (SİMÜLATÖR)
+# TAB 3: ZAMAN MAKİNESİ (Öncekiyle aynı)
 # ---------------------------------------------------------
 with tab3:
     st.header("⏳ Yatırım Simülatörü")
-    st.write("Geçmişte yatırım yapsaydın bugün ne kadar paran olurdu?")
-    
     col1, col2, col3 = st.columns(3)
-    tutar = col1.number_input("Yatırılan Tutar (TL)", value=10000, step=1000)
+    tutar = col1.number_input("Yatırılan Tutar (TL)", value=10000)
     tarih = col2.date_input("Hangi Tarihte?", value=datetime.now() - timedelta(days=365))
     varlik_secim = col3.selectbox("Hangi Varlık?", list(varliklar.keys()))
     
-    hesapla_btn = st.button("💸 Hesapla")
-    
-    if hesapla_btn:
+    if st.button("Hesapla"):
         df_sim = veri_getir(varliklar[varlik_secim])
         secilen_tarih_str = tarih.strftime('%Y-%m-%d')
-        
         if not df_sim.empty:
-            # Seçilen tarihe en yakın veriyi bul
             try:
                 gecmis_veri = df_sim.iloc[df_sim.index.get_indexer([secilen_tarih_str], method='nearest')]
                 gecmis_fiyat = float(gecmis_veri['Close'].values[0])
                 guncel_fiyat = float(df_sim['Close'].iloc[-1])
-                
-                # Hesaplama
                 adet = tutar / gecmis_fiyat
                 guncel_deger = adet * guncel_fiyat
                 kar_zarar = guncel_deger - tutar
-                yuzde = (kar_zarar / tutar) * 100
                 
-                st.markdown("---")
                 c1, c2, c3 = st.columns(3)
-                c1.metric("O Gün Alınan Miktar", f"{adet:.2f} Adet")
-                c2.metric("Bugünkü Değeri", f"{guncel_deger:,.2f} TL", f"%{yuzde:.1f}")
-                c3.metric("Net Kar/Zarar", f"{kar_zarar:,.2f} TL")
-                
-                if kar_zarar > 0:
-                    st.success(f"🎉 Tebrikler! Eğer o gün alıp bekleseydin paran **{yuzde:.1f} kat** artacaktı.")
-                else:
-                    st.error("📉 Maalesef, bu yatırım o tarihten beri değer kaybetmiş.")
-                    
-            except Exception as e:
-                st.error("Seçilen tarih için veri bulunamadı. Lütfen daha yakın bir tarih seçin.")
+                c1.metric("O Gün Alınan", f"{adet:.2f} Adet")
+                c2.metric("Bugünkü Değer", f"{guncel_deger:,.2f} TL")
+                c3.metric("Kar/Zarar", f"{kar_zarar:,.2f} TL", delta_color="normal" if kar_zarar > 0 else "inverse")
+            except:
+                st.error("Tarih verisi bulunamadı.")
